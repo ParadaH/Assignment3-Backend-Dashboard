@@ -6,6 +6,7 @@
   <title>ESP32 Temperature Dashboard</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+  <script src="dashboard.js" defer></script>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -45,15 +46,19 @@
     h1, h2, p {
       margin: 0 0 15px 0;
     }
+
+    button {
+      margin-right: 10px;
+    }
   </style>
 </head>
 <body>
 <h1>ESP32 Temperature Dashboard</h1>
 
 <div class="container">
-  <!-- Column 1: Information and controls -->
   <div class="column">
     <div class="card">
+      <h2>System Information</h2>
       <div class="info">
         Current Temperature: <span id="currentTemperature">Loading...</span> °C
       </div>
@@ -62,6 +67,9 @@
       </div>
       <div class="info">
         Current System State: <span id="systemState">Loading...</span>
+      </div>
+      <div class="info">
+        Window Opening Tilt: <span id="windowTilt">Loading...</span>%
       </div>
       <div class="info">
         Average Temperature: <span id="averageTemperature">Loading...</span> °C
@@ -76,11 +84,12 @@
     <div class="card">
       <h2>System Controls</h2>
       <button id="resetAlarmButton">Reset Alarm</button>
+      <button id="autoModeButton">Auto Mode</button>
+      <button id="manualModeButton">Manual Mode</button>
       <button id="cleanHistoryButton">Clean History</button>
     </div>
   </div>
 
-  <!-- Column 2: Chart -->
   <div class="column">
     <div class="card">
       <h2>Temperature Over Time</h2>
@@ -88,163 +97,5 @@
     </div>
   </div>
 </div>
-
-<script>
-  const API_URL = 'http://localhost:8080';
-  console.log("Dashboard script loaded.");
-
-  // Chart.js setup
-  const ctx = document.getElementById('temperatureChart').getContext('2d');
-  const temperatureChart = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels: [],
-      datasets: [{
-        label: 'Temperature (°C)',
-        data: [],
-        borderColor: 'rgba(75, 192, 192, 1)',
-        borderWidth: 2,
-        fill: false
-      }]
-    },
-    options: {
-      responsive: true,
-      scales: {
-        x: {
-          type: 'time',
-          time: {
-            unit: 'second'
-          },
-          title: {
-            display: true,
-            text: 'Time'
-          }
-        },
-        y: {
-          title: {
-            display: true,
-            text: 'Temperature (°C)'
-          }
-        }
-      }
-    }
-  });
-
-  // Fetch current temperature
-  async function fetchCurrentTemperature() {
-    try {
-      const response = await fetch(`${API_URL}/ESP32_temperature`);
-      if (response.ok) {
-        const data = await response.json();
-        document.getElementById('currentTemperature').innerText = `${data.temperature}`;
-      }
-    } catch (error) {
-      console.error("Error fetching current temperature:", error);
-    }
-  }
-
-  // Fetch sampling frequency
-  async function fetchSamplingFrequency() {
-    try {
-      const response = await fetch(`${API_URL}/samplingFrequency`);
-      if (response.ok) {
-        const data = await response.json();
-        document.getElementById('samplingFrequency').innerText = `${data.samplingFrequency}`;
-      }
-    } catch (error) {
-      console.error("Error fetching sampling frequency:", error);
-    }
-  }
-
-  // Fetch system state
-  async function fetchSystemState() {
-    try {
-      const response = await fetch(`${API_URL}/systemState`);
-      if (response.ok) {
-        const data = await response.json();
-        document.getElementById('systemState').innerText = `${data.systemState}`;
-      }
-    } catch (error) {
-      console.error("Error fetching system state:", error);
-    }
-  }
-
-  // Fetch temperature history
-  async function fetchTemperatureHistory() {
-    try {
-      const response = await fetch(`${API_URL}/temperatureHistory`);
-      if (response.ok) {
-        const data = await response.json();
-
-        // Update chart
-        temperatureChart.data.labels = data.map(point => new Date(point.timestamp));
-        temperatureChart.data.datasets[0].data = data.map(point => point.temperature);
-        temperatureChart.update();
-
-        // Calculate average, max, and min temperatures
-        const temperatures = data.map(point => point.temperature);
-        const avgTemp = (temperatures.reduce((sum, val) => sum + val, 0) / temperatures.length).toFixed(2);
-        const maxTemp = Math.max(...temperatures).toFixed(2);
-        const minTemp = Math.min(...temperatures).toFixed(2);
-
-        document.getElementById('averageTemperature').innerText = avgTemp;
-        document.getElementById('maxTemperature').innerText = maxTemp;
-        document.getElementById('minTemperature').innerText = minTemp;
-      }
-    } catch (error) {
-      console.error("Error fetching temperature history:", error);
-    }
-  }
-
-  // Handle reset alarm button click
-  document.getElementById('resetAlarmButton').addEventListener('click', () => {
-    fetch(`${API_URL}/sendCommand`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ command: 'RESET_ALARM' })
-    }).then(response => {
-      if (response.ok) {
-        console.log('Reset command sent successfully');
-      } else {
-        console.error('Failed to send reset command');
-      }
-    }).catch(error => console.error('Error:', error));
-  });
-
-  // Handle clean history button click
-  document.getElementById('cleanHistoryButton').addEventListener('click', () => {
-    // Clear chart locally
-    temperatureChart.data.labels = [];
-    temperatureChart.data.datasets[0].data = [];
-    temperatureChart.update();
-
-    // Send request to backend to clear temperature history
-    fetch(`${API_URL}/clearTemperatureHistory`, {
-      method: 'POST',
-    }).then(response => {
-      if (response.ok) {
-        console.log('Temperature history cleared on backend.');
-      } else {
-        console.error('Failed to clear temperature history on backend.');
-      }
-    }).catch(error => console.error('Error:', error));
-  });
-
-  // Update data every second
-  setInterval(() => {
-    fetchCurrentTemperature();
-    fetchSamplingFrequency();
-    fetchSystemState();
-    fetchTemperatureHistory();
-  }, 1000);
-
-  // Initial data fetch
-  fetchCurrentTemperature();
-  fetchSamplingFrequency();
-  fetchSystemState();
-  fetchTemperatureHistory();
-</script>
 </body>
 </html>

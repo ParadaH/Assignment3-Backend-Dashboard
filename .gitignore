@@ -1,1 +1,35 @@
-/target/
+# IntelliJ IDEA specific files
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Maven specific files
+target/
+.mvn/
+.settings/
+
+# Build output directories
+out/
+bin/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*.bak
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Node.js dependencies (if used for the frontend)
+node_modules/
+
+# IDE generated files
+.classpath
+.project
+
+# Generated webroot files (if applicable)
+webroot/*.cache
+webroot/*.tmp

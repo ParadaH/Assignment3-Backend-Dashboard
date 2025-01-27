@@ -18,6 +18,7 @@ import com.fazecast.jSerialComm.SerialPort;
 import java.io.InputStream;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Objects;
 
 /*
  * MQTT Agent
@@ -35,9 +36,12 @@ public class MQTTAgent extends AbstractVerticle {
 
 	private float latestTemperature = 0.0f;
 	private int samplingFrequency = 5000;
+	private int windowTilt = 0;
 	private int previousSamplingFrequency = 5000;
 	private static String SYSTEM_STATE = "NORMAL";
+	private String PREVIOUS_SYSTEM_STATE = "";
 
+	private boolean alarmActive = false;
 
 	public MQTTAgent() {
 		serialPort = SerialPort.getCommPort("COM3");
@@ -46,10 +50,8 @@ public class MQTTAgent extends AbstractVerticle {
 			System.out.println("Failed to open serial port.");
 		} else {
 			System.out.println("Serial port opened successfully.");
-//			startSerialListener(serialPort);
 		}
 	}
-
 	@Override
 	public void start() {
 
@@ -61,10 +63,8 @@ public class MQTTAgent extends AbstractVerticle {
 			log("Subscribing!");
 
 			client.publishHandler(s -> {
-				System.out.println("There are new message in topic: " + TOPIC_TEMP);
 				String payload = s.payload().toString(); //temperature to string extraction
-				System.out.println("Temperature: " + payload + " [°C]");
-
+				System.out.println("Received from temperature-monitoring-subsystem: " + payload + " [°C]");
 				try {
 					latestTemperature = Float.parseFloat(payload);
 					JsonObject dataPoint = new JsonObject()
@@ -74,33 +74,29 @@ public class MQTTAgent extends AbstractVerticle {
 					if (temperatureHistory.size() > MAX_HISTORY_SIZE) {
 						temperatureHistory.remove(0);
 					}
-					updateSystemStateBasedOnTemperatureHistory(client);
+					updateSubsystems(client);
 				} catch(NumberFormatException e)  {
 					System.out.println("Invalid temperature format received: " + payload);
 				}
-
-				if(serialPort.isOpen()){
-					try {
-						serialPort.getOutputStream().write((s.payload() + "\n").getBytes());
-						System.out.println("Data temperature sent to Arduino: " + payload);
-					} catch (IOException e) {
-						throw new RuntimeException(e);
-					}
-				}
+				if(serialPort.isOpen() && !Objects.equals(SYSTEM_STATE, "ALARM")){
+                    sendSerialCommand(payload);
+                }
 			}).subscribe(TOPIC_TEMP, 2);
 
 		});
 
 		// HTTP Server setup
 		Router router = Router.router(vertx);
-
 		router.route("/*").handler(StaticHandler.create("webroot"));
 
+		// GET/POST setup
 		router.get("/ESP32_temperature").handler(this::handleGetTemperature);
 		router.get("/temperatureHistory").handler(this::handleGetTemperatureHistory);
 		router.get("/samplingFrequency").handler(this::handleGetSamplingFrequency);
-		router.post("/sendCommand").handler(BodyHandler.create()).handler(this::handleSendCommand);
 		router.get("/systemState").handler(this::handleGetSystemState);
+		router.get("/windowTilt").handler(this::handleGetWindowTilt);
+
+		router.post("/sendCommand").handler(BodyHandler.create()).handler(this::handleSendCommand);
 		router.post("/clearTemperatureHistory").handler(this::handleClearTemperatureHistory);
 
 		vertx.createHttpServer()
@@ -113,17 +109,15 @@ public class MQTTAgent extends AbstractVerticle {
 						System.out.println("HTTP server failed to start: " + result.cause());
 					}
 				});
-
 	}
 
-	// HTTP handle temperature
 	private void handleGetTemperature(RoutingContext context) {
 		JsonObject response = new JsonObject().put("temperature", latestTemperature);
 		context.response()
 				.putHeader("Content-Type", "application/json")
 				.end(response.encodePrettily());
 	}
-	// HTTP handle temperature history
+
 	private void handleGetTemperatureHistory(RoutingContext context) {
 		context.response()
 				.putHeader("Content-Type", "application/json")
@@ -152,61 +146,40 @@ public class MQTTAgent extends AbstractVerticle {
 				.end(new JsonObject().put("status", "success").encodePrettily());
 	}
 
-	private void log(String msg) {
-		System.out.println("[MQTT AGENT] "+msg);
-	}
-
-	private void updateSystemStateBasedOnTemperatureHistory(MqttClient client) {
-		long currentTime = System.currentTimeMillis();
-		boolean alarmConditionMet = temperatureHistory.stream()
-				.filter(dataPoint -> currentTime - dataPoint.getLong("timestamp") <= 10000) // Ostatnie 10 sekund
-				.allMatch(dataPoint -> dataPoint.getFloat("temperature") >= 30); // Wszystkie temperatury >= 30
-
-		if (alarmConditionMet) {
-			SYSTEM_STATE = "ALARM";
-			samplingFrequency = 500;
-			sendSerialCommand("ALARM");
-		} else if (latestTemperature < 25) {
-			SYSTEM_STATE = "NORMAL";
-			samplingFrequency = 5000;
-		} else if (latestTemperature >= 25 && latestTemperature < 30) {
-			SYSTEM_STATE = "HOT";
-			sendSerialCommand("ALARM");
-			samplingFrequency = 2000;
-		} else if (latestTemperature >= 30) {
-			SYSTEM_STATE = "TOO HOT";
-			samplingFrequency = 1000;
-		}
-
-		startSerialListener(serialPort);
-		publishSamplingFrequency(client);
-		System.out.println("Updated system state: " + SYSTEM_STATE);
+	private void handleGetWindowTilt(RoutingContext context) {
+		JsonObject response = new JsonObject()
+				.put("windowTilt", windowTilt);
+		context.response()
+				.putHeader("Content-Type", "application/json")
+				.end(response.encodePrettily());
 	}
 
 	private void handleSendCommand(RoutingContext context) {
 		JsonObject body = context.getBodyAsJson();
 		if (body != null && body.containsKey("command")) {
 			String command = body.getString("command");
-			if (command.equals("RESET_ALARM")) {
-				try {
-					serialPort.getOutputStream().write("RESET_ALARM\n".getBytes());
-					System.out.println("Sent RESET_ALARM to Arduino");
-					context.response()
-							.putHeader("Content-Type", "application/json")
-							.end(new JsonObject().put("status", "success").encodePrettily());
-				} catch (IOException e) {
-					e.printStackTrace();
-					context.response()
-							.setStatusCode(500)
-							.putHeader("Content-Type", "application/json")
-							.end(new JsonObject().put("status", "error").encodePrettily());
-				}
-			} else {
-				context.response()
-						.setStatusCode(400)
-						.putHeader("Content-Type", "application/json")
-						.end(new JsonObject().put("error", "Invalid command").encodePrettily());
-			}
+            switch (command) {
+                case "RESET_ALARM" -> {
+                    alarmActive = false;
+                    sendSerialCommand("998");
+                    context.response()
+                            .putHeader("Content-Type", "application/json")
+                            .end(new JsonObject().put("status", "success").encodePrettily());
+                }
+                case "AUTO_MODE" -> {
+                    sendSerialCommand("1001");
+                    context.response()
+                            .putHeader("Content-Type", "application/json")
+                            .end(new JsonObject().put("status", "success").encodePrettily());
+                }
+                case "MANUAL_MODE" -> {
+                    sendSerialCommand("1002");
+					System.out.println("Sent manual mode command");
+                    context.response()
+                            .putHeader("Content-Type", "application/json")
+                            .end(new JsonObject().put("status", "success").encodePrettily());
+                }
+            }
 		} else {
 			context.response()
 					.setStatusCode(400)
@@ -217,27 +190,54 @@ public class MQTTAgent extends AbstractVerticle {
 
 	private void publishSamplingFrequency(MqttClient client) {
 		if (samplingFrequency != previousSamplingFrequency) {
-			// Publikuj tylko, jeśli wartość uległa zmianie
-
 			String samplingFrequencyMessage = String.valueOf(samplingFrequency);
 			client.publish(TOPIC_SAMPLING_FREQUENCY,
 					Buffer.buffer(samplingFrequencyMessage),
 					MqttQoS.AT_LEAST_ONCE,
 					false,
 					false);
-
-			System.out.println("Published new sampling frequency: " + samplingFrequency + " ms");
-
-			// Aktualizuj poprzednią wartość
 			previousSamplingFrequency = samplingFrequency;
+			System.out.println("Published new sampling frequency: " + samplingFrequency + " ms");
 		}
+	}
+
+	private void updateSubsystems(MqttClient client) {
+		long currentTime = System.currentTimeMillis();
+		// Check for state: ALARM
+		boolean alarmFlag = temperatureHistory.stream()
+				.filter(dataPoint -> currentTime - dataPoint.getLong("timestamp") <= 3000)
+				.allMatch(dataPoint -> dataPoint.getFloat("temperature") >= 30);
+
+		if (alarmFlag && !alarmActive) {
+			SYSTEM_STATE = "ALARM";
+			samplingFrequency = 500;
+			sendSerialCommand("999");
+			alarmActive = true;
+		} else if (!alarmActive) {
+			if (latestTemperature < 25) {
+				SYSTEM_STATE = "NORMAL";
+				samplingFrequency = 5000;
+			} else if (latestTemperature >= 25 && latestTemperature < 30) {
+				SYSTEM_STATE = "HOT";
+				samplingFrequency = 2000;
+			} else if (latestTemperature >= 30) {
+				SYSTEM_STATE = "TOO HOT";
+				samplingFrequency = 1000;
+			}
+		}
+		if(!SYSTEM_STATE.equals(PREVIOUS_SYSTEM_STATE)){
+			System.out.println("Updated system state: " + SYSTEM_STATE);
+			PREVIOUS_SYSTEM_STATE = SYSTEM_STATE;
+		}
+		readSerialCommand(serialPort);
+		publishSamplingFrequency(client);
 	}
 
 	private void sendSerialCommand(String message) {
 		if (serialPort.isOpen()) {
 			try {
 				serialPort.getOutputStream().write((message + "\n").getBytes());
-				System.out.println("Sent to Arduino: " + message);
+				System.out.println("Sent to window-controller: " + message);
 			} catch (IOException e) {
 				System.err.println("Error sending message via Serial: " + e.getMessage());
 			}
@@ -246,7 +246,7 @@ public class MQTTAgent extends AbstractVerticle {
 		}
 	}
 
-	private void startSerialListener(SerialPort serialPort) {
+	private void readSerialCommand(SerialPort serialPort) {
 		new Thread(() -> {
 			try (InputStream inputStream = serialPort.getInputStream()) {
 				byte[] buffer = new byte[1024];
@@ -254,13 +254,21 @@ public class MQTTAgent extends AbstractVerticle {
 					int bytesRead = inputStream.read(buffer);
 					if (bytesRead > 0) {
 						String receivedData = new String(buffer, 0, bytesRead).trim();
-						System.out.println("Received from Arduino: " + receivedData);
+						try  {
+							windowTilt = Integer.parseInt(receivedData);
+						} catch (NumberFormatException e) {
+							System.out.println("Received from window-controller: " + receivedData);
+						}
 					}
 				}
 			} catch (IOException e) {
-				System.err.println("Error in Serial listener: " + e.getMessage());
+//				System.err.println("Error in Serial listener: " + e.getMessage());
 			}
 		}).start();
 	}
-}
 
+	private void log(String msg) {
+		System.out.println("[MQTT AGENT] "+msg);
+	}
+
+}
