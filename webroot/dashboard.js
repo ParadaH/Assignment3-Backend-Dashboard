@@ -1,4 +1,4 @@
-const API_URL = 'http://localhost:8080';
+const API_URL = 'https://79ed-151-41-246-214.ngrok-free.app';
 
 const ctx = document.getElementById('temperatureChart').getContext('2d');
 const temperatureChart = new Chart(ctx, {

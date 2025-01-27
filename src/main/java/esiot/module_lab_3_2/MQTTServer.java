@@ -15,8 +15,7 @@ public class MQTTServer {
 		Vertx vertx = Vertx.vertx();
 		MqttServer mqttServer = MqttServer.create(vertx);
 		mqttServer.endpointHandler(endpoint -> {
-	
-		  // shows main connect info
+
 		  System.out.println("MQTT client [" + endpoint.clientIdentifier() + "] request to connect, clean session = " + endpoint.isCleanSession());
 	
 		  if (endpoint.auth() != null) {
@@ -29,7 +28,6 @@ public class MQTTServer {
 	
 		  System.out.println("[keep alive timeout = " + endpoint.keepAliveTimeSeconds() + "]");
 	
-		  // accept connection from the remote client
 		  endpoint.accept(false);
 	
 		})

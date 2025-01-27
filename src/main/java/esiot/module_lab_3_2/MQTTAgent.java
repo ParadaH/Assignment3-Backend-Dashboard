@@ -10,6 +10,9 @@ import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.BodyHandler;
 import io.vertx.ext.web.handler.StaticHandler;
 import io.vertx.mqtt.MqttClient;
+import io.vertx.ext.web.handler.CorsHandler;
+import io.vertx.ext.web.handler.LoggerHandler;
+import io.vertx.core.http.HttpMethod;
 
 import java.io.IOException;
 
@@ -63,7 +66,7 @@ public class MQTTAgent extends AbstractVerticle {
 			log("Subscribing!");
 
 			client.publishHandler(s -> {
-				String payload = s.payload().toString(); //temperature to string extraction
+				String payload = s.payload().toString();
 				System.out.println("Received from temperature-monitoring-subsystem: " + payload + " [°C]");
 				try {
 					latestTemperature = Float.parseFloat(payload);
@@ -82,11 +85,18 @@ public class MQTTAgent extends AbstractVerticle {
                     sendSerialCommand(payload);
                 }
 			}).subscribe(TOPIC_TEMP, 2);
-
 		});
 
-		// HTTP Server setup
 		Router router = Router.router(vertx);
+		router.route().handler(LoggerHandler.create());
+
+		router.route().handler(CorsHandler.create("*")
+				.allowedMethod(HttpMethod.GET)
+				.allowedMethod(HttpMethod.POST)
+				.allowedMethod(HttpMethod.OPTIONS)
+				.allowedHeader("Content-Type")
+				.allowedHeader("Access-Control-Allow-Origin"));
+
 		router.route("/*").handler(StaticHandler.create("webroot"));
 
 		// GET/POST setup
